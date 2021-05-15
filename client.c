@@ -9,14 +9,26 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-typedef struct {
-    int idx;
-} init_args_t;
+// Returns size of data in `out`.
+int serialize_msg(const message_t *msg, char *out) {
+    *((uint32_t*)out) = htonl(msg->msg_id);
+    out += 4;
+    *((uint32_t *)out) = htonl(msg->body_size);
+    out += 4;
+    *out = msg->is_finish;
+    out += 1;
+    memcpy(out, msg->msg, msg->body_size);
+    return msg->body_size + 9;
+}
 
 void *client_routine(void *args) {
-    int idx = 0, socket_fd = 0, retry = 0;
-    init_args_t* descr = (init_args_t *) args;
-    
+    int i = 0, socket_fd = 0, retry = 0;
+    message_t msg;
+    int thread_idx = *(int *)args;
+
+    int msg_len = 0;
+    char msg_buf[BUFFER_SIZE];
+
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
@@ -26,35 +38,40 @@ void *client_routine(void *args) {
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (socket_fd == -1) {
         // TODO proccess error
-        printf("Create client socket for %d failed.\n", idx);
+        printf("Create client socket for %d failed.\n", thread_idx);
         return NULL;
     }
 
-    while (connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
+    while (connect(socket_fd, (struct sockaddr *)&server_addr,
+                    sizeof(server_addr)) == -1) {
         if (++retry == MAX_RETRIES) {
-            // TODO proccess error
-            printf("Failed to connect to server. \n");
-            return NULL;
+        // TODO proccess error
+        printf("Failed to connect to server. \n");
+        return NULL;
         }
-        printf("[%d] Sleep and retry #%d\n", descr->idx, retry);
+        printf("[%d] Sleep and retry #%d\n", thread_idx, retry);
         sleep(1);
     }
 
-    for (idx = 0; idx < MESSAGES_COUNT; ++idx) {
+    msg.msg_id = 1;
+    msg.body_size = sprintf(msg.msg, "Hi from %d", thread_idx);
+    msg_len = serialize_msg(&msg, msg_buf);
+    send(socket_fd, msg_buf, msg_len, 0);
 
+    for (i = 0; i < MESSAGES_COUNT; ++i) {
     }
-    return NULL;
+     return NULL;
 }
 
 int main(int argc, char *argv[]) {
     int idx = 0;
     int status = 0;
     pthread_t threads[N];
-    init_args_t thread_args[N];
+    int thread_idxs[N];
 
     for (idx = 0; idx < N; ++idx) {
-        thread_args[idx].idx = idx;
-        status = pthread_create(&threads[idx], NULL, client_routine, &thread_args[idx]);
+        thread_idxs[idx] = idx;
+        status = pthread_create(&threads[idx], NULL, client_routine, &thread_idxs[idx]);
         if (status != 0) {
             // TODO proccess error
             printf("Create thread %d failed, status = %d\n", idx, status);

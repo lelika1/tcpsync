@@ -10,17 +10,57 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+int readbytes(int conn_fd, char* to, size_t n) {
+    int got = 0;
+    while (n > 0) {
+        got = recv(conn_fd, to, n, 0);
+        if (got == -1) {
+            return -1;
+        }
+        to += got;
+        n -= got;
+    }
+    return 0;
+}
+
+// Returns size of data in `out`.
+int deserialize_msg(int conn_fd, message_t *out) {
+    char buf[9];
+    if (readbytes(conn_fd, buf, 9) == -1) {
+        printf("Failed to read header.\n");
+        return -1;
+    }
+    out->msg_id = ntohl(*((uint32_t *)buf));
+    out->body_size = ntohl(*((uint32_t *)(buf+4)));
+    if (out->body_size > sizeof(out->msg)) {
+        printf("Body size (%d) is bigger than max message size (%ld)\n", out->body_size, sizeof(out->msg)); 
+        return -1;
+    }
+    out->is_finish = buf[8];
+    if (readbytes(conn_fd, out->msg, out->body_size) == -1) {
+        printf("Failed to read body with size %d.\n", out->body_size);
+        return -1;
+    }
+    return 0;
+}
+
 void *worker_routine(void *args) {
     int idx;
     init_args_t *descr = (init_args_t *) args;
     for (idx = 0; idx < descr->conn_count; ++idx) {
         printf("%d -> %d\n", descr->idx, descr->connections[idx].conn_fd);
     }
+    
+    message_t msg;
+    for (idx = 0; idx < descr->conn_count; ++idx) {
+        deserialize_msg(descr->connections[idx].conn_fd, &msg);
+        fwrite(msg.msg, msg.body_size, 1, descr->connections[idx].out_fd);
+    }
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
-    int idx = 0;
+    int i = 0;
     int status = 0;
 
     pthread_t threads[WORKERS];
@@ -53,16 +93,16 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    for (idx = 0; idx < N; ++idx) {
-        connections[idx].conn_fd = accept(socket_fd, (struct sockaddr*)NULL, NULL);
-        if (sprintf(file_name, "./%d.txt", idx) < 0) {
+    for (i = 0; i < N; ++i) {
+        connections[i].conn_fd = accept(socket_fd, (struct sockaddr*)NULL, NULL);
+        if (sprintf(file_name, "./%d.txt", i) < 0) {
             printf("sprintf() failed");
             return 1;
         }
 
         // printf("File: %s", file_name);
-        connections[idx].out_fd = fopen(file_name, "w");
-        if (connections[idx].out_fd == NULL) {
+        connections[i].out_fd = fopen(file_name, "w");
+        if (connections[i].out_fd == NULL) {
             printf("Failed to open %s.", file_name);
             return 1;
         }
@@ -70,28 +110,32 @@ int main(int argc, char *argv[]) {
 
     conn_descr_t *start_conn = connections;
     int connections_left = N;
-    for (idx = 0; idx < WORKERS; ++idx) {        
-        threads_args[idx].idx = idx;
-        threads_args[idx].connections = start_conn;
-        threads_args[idx].conn_count = connections_left < CONNECTIONS_PER_WORKER ? connections_left : CONNECTIONS_PER_WORKER;
-        start_conn += threads_args[idx].conn_count;
-        connections_left -= threads_args[idx].conn_count;
+    for (i = 0; i < WORKERS; ++i) {        
+        threads_args[i].idx = i;
+        threads_args[i].connections = start_conn;
+        threads_args[i].conn_count = connections_left < CONNECTIONS_PER_WORKER ? connections_left : CONNECTIONS_PER_WORKER;
+        start_conn += threads_args[i].conn_count;
+        connections_left -= threads_args[i].conn_count;
 
-        status = pthread_create(&threads[idx], NULL, worker_routine, &threads_args[idx]);
+        status = pthread_create(&threads[i], NULL, worker_routine, &threads_args[i]);
         if (status != 0) {
             // TODO proccess error
-            printf("Create thread %d failed, status = %d\n", idx, status);
+            printf("Create thread %d failed, status = %d\n", i, status);
         }
     }
 
-    // close(conn_fd);
 
-    for (idx = 0; idx < WORKERS; ++idx) {
-        status = pthread_join(threads[idx], NULL);
+    for (i = 0; i < WORKERS; ++i) {
+        status = pthread_join(threads[i], NULL);
         if (status != 0) {
             // TODO proccess error
-            printf("Join thread %d failed, status = %d\n", idx, status);
+            printf("Join thread %d failed, status = %d\n", i, status);
         }
+    }
+    
+    for (i = 0; i < N; ++i) {
+        close(connections[i].conn_fd);
+        fclose(connections[i].out_fd);
     }
     return 0;
 }
