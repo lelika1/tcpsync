@@ -1,5 +1,6 @@
-TARGETS = server client
-all: $(TARGETS)
+.PHONY: cleanup
+
+all: server client
 
 server: server.c config.h
 	gcc -o server server.c -lpthread -I.
@@ -9,3 +10,6 @@ client: client.c config.h
 
 run_server: server client
 	./server
+
+cleanup:
+	rm -f *.txt client server
