@@ -72,7 +72,7 @@ void *worker_routine(void *args) {
             }
 
             read_msg(conn->network_fd, &msg);
-            if (msg.is_finish == 1) {
+            if (msg.msg_id == CLOSING_ID) {
                 conn->is_active = false;
                 --worker->active_connections;
                 if (conn->unacked > 0) {

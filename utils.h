@@ -19,12 +19,13 @@
 // #define DEBUGF printf
 #define DEBUGF(...)
 
+extern const uint32_t CLOSING_ID;
+
 // Message struct - should be 8kbyte size.
 typedef struct {
     uint32_t msg_id;
     uint32_t body_size;
-    char is_finish;
-    char msg[MESSAGE_SIZE - 9];
+    char msg[MESSAGE_SIZE - 8];
 } message_t;
 
 // Read from conn_fd until we've successfully read n bytes.
