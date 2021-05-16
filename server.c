@@ -10,17 +10,19 @@ typedef struct {
     int network_fd;
     FILE *disk_fd;
 
-    char write_buf[MAX_INFLIGHT_SERVER * MESSAGE_SIZE];
-    uint32_t write_buf_size;
-
+    // IDs of unacked messages we haven't fflushed onto disk yet.
     uint32_t unacked_ids[MAX_INFLIGHT_SERVER];
+    // Number of such messages.
     int unacked;
 } connection_t;
 
 typedef struct {
+    // Worker index.
     int idx;
+    // Connections in [connections; connections + connections_size[ belong to us.
     connection_t *connections;
     int connections_size;
+    // Number of connections that are still sending data.
     int active_connections;
 } worker_t;
 
@@ -38,7 +40,7 @@ void flush_and_ack(connection_t *conn) {
     if (conn->unacked == 0) {
         return;
     }
-    fwrite(conn->write_buf, conn->write_buf_size, 1, conn->disk_fd);
+
     fflush(conn->disk_fd);
 
     uint32_t acks[MAX_INFLIGHT_SERVER + 1];
@@ -48,7 +50,6 @@ void flush_and_ack(connection_t *conn) {
     }
 
     send(conn->network_fd, &acks, sizeof(uint32_t) * (conn->unacked + 1), 0);
-    conn->write_buf_size = 0;
     conn->unacked = 0;
 }
 
@@ -75,13 +76,9 @@ void *worker_routine(void *args) {
             if (msg.msg_id == CLOSING_ID) {
                 conn->is_active = false;
                 --worker->active_connections;
-                if (conn->unacked > 0) {
-                    flush_and_ack(conn);
-                }
+                flush_and_ack(conn);
             } else {
-                // TODO: check that we don't overflow conn->write_buf
-                memcpy(conn->write_buf + conn->write_buf_size, msg.payload, msg.body_size);
-                conn->write_buf_size += msg.body_size;
+                fwrite(msg.payload, msg.body_size, 1, conn->disk_fd);
                 conn->unacked_ids[conn->unacked] = htonl(msg.msg_id);
                 ++conn->unacked;
                 if (conn->unacked == MAX_INFLIGHT_SERVER) {
@@ -140,7 +137,6 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         connections[i].is_active = true;
-        connections[i].write_buf_size = 0;
         connections[i].unacked = 0;
     }
 
@@ -185,5 +181,5 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-// Constants below are for memory and file size computations (not used anywhere).
+// Constant below compute the approx memory footprint of the server (only for debugging).
 const int MEMUSED_MB = (NUM_WORKERS * sizeof(worker_t) + sizeof(connection_t) * N) / 1024 / 1024;

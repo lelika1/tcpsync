@@ -10,14 +10,13 @@
 
 #include "utils.h"
 
-// Number of messages every client thread retains in memory unacked.
-
 const uint32_t MESSAGES_COUNT = 5000000;
 const int MAX_CONNECTION_RETRIES = 5;
 
-// Constants below are for memory and file size computations (not used anywhere).
-const uint32_t MEMUSED_MB = MAX_INFLIGHT_CLIENT * MESSAGE_SIZE * N / 1024 / 1024;
-const uint32_t FILESIZE_MB = MESSAGES_COUNT * MESSAGE_SIZE / 1024 / 1024;
+// Constants below compute the approx memory footprint of the client and files stored by the server
+// (only for debugging).
+const uint32_t MEMUSED_MB = (uint64_t)(MAX_INFLIGHT_CLIENT)*MESSAGE_SIZE * N / 1024 / 1024;
+const uint32_t FILESIZE_MB = (uint64_t)(MESSAGES_COUNT)*MESSAGE_SIZE / 1024 / 1024;
 const uint32_t ALL_FILES_GB = FILESIZE_MB * N / 1024;
 
 int read_acks(int fd, uint32_t *count, uint32_t *ids) {

@@ -10,13 +10,16 @@
 #define SERVER_PORT 5000
 #define SERVER_IP "127.0.0.1"
 
-#define MAX_INFLIGHT_CLIENT 10000
-#define MAX_INFLIGHT_SERVER 10000
+// Number of messages every client (or server) thread retains in memory unacked.
+// Invariant: MAX_INFLIGHT_CLIENT >= MAX_INFLIGHT_SERVER
+#define MAX_INFLIGHT_CLIENT 2000
+#define MAX_INFLIGHT_SERVER 2000
 
 // Uncomment to enable debug output:
 // #define DEBUGF printf
 #define DEBUGF(...)
 
+// Special ID value for the last message in client-server session.
 extern const uint32_t CLOSING_ID;
 
 #define MESSAGE_SIZE 8192
