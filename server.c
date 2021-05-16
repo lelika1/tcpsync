@@ -9,6 +9,12 @@ typedef struct {
     int network_fd;
     bool is_active;
     FILE *disk_fd;
+
+    char write_buf[MAX_INFLIGHT_SERVER * MESSAGE_SIZE];
+    int write_buf_size;
+
+    uint32_t unacked_ids[MAX_INFLIGHT_SERVER];
+    int unacked;
 } connection_t;
 
 typedef struct {
@@ -17,6 +23,8 @@ typedef struct {
     int connections_size;
     int active_connections;
 } worker_t;
+
+const int MEMUSED_MB = (NUM_WORKERS * sizeof(worker_t) + sizeof(connection_t) * N) / 1024 / 1024;
 
 void fill_fd_set(const worker_t *worker, fd_set *fdset) {
     int i = 0;
@@ -28,12 +36,27 @@ void fill_fd_set(const worker_t *worker, fd_set *fdset) {
     }
 }
 
+void flush_and_ack(connection_t *conn) {
+    if (conn->unacked == 0) {
+        return;
+    }
+    fwrite(conn->write_buf, conn->write_buf_size, 1, conn->disk_fd);
+    fflush(conn->disk_fd);
+
+    uint32_t acks[MAX_INFLIGHT_SERVER + 1];
+    acks[0] = htonl(conn->unacked);
+    for (int i = 0; i < conn->unacked; ++i) {
+        acks[i + 1] = conn->unacked_ids[i];
+    }
+
+    send(conn->network_fd, &acks, sizeof(uint32_t) * (conn->unacked + 1), 0);
+    conn->write_buf_size = 0;
+    conn->unacked = 0;
+}
+
 void *worker_routine(void *args) {
-    int i = 0;
-    int ack = 0;
     message_t msg;
     fd_set read_fd_set;
-    connection_t *conn = NULL;
 
     worker_t *worker = (worker_t *)args;
     while (worker->active_connections > 0) {
@@ -42,8 +65,8 @@ void *worker_routine(void *args) {
             continue;
         }
 
-        for (i = 0; i < worker->connections_size; ++i) {
-            conn = &worker->connections[i];
+        for (int i = 0; i < worker->connections_size; ++i) {
+            connection_t *conn = &worker->connections[i];
             if (!conn->is_active || !FD_ISSET(conn->network_fd, &read_fd_set)) {
                 continue;
             }
@@ -52,13 +75,18 @@ void *worker_routine(void *args) {
             if (msg.is_finish == 1) {
                 conn->is_active = false;
                 --worker->active_connections;
-                close(conn->network_fd);
-                fclose(conn->disk_fd);
+                if (conn->unacked > 0) {
+                    flush_and_ack(conn);
+                }
             } else {
-                fwrite(msg.msg, msg.body_size, 1, conn->disk_fd);
-
-                ack = htonl(msg.msg_id);
-                send(conn->network_fd, &ack, 4, 0);
+                // TODO: check that we don't overflow conn->write_buf
+                memcpy(conn->write_buf + conn->write_buf_size, msg.msg, msg.body_size);
+                conn->write_buf_size += msg.body_size;
+                conn->unacked_ids[conn->unacked] = htonl(msg.msg_id);
+                ++conn->unacked;
+                if (conn->unacked == MAX_INFLIGHT_SERVER) {
+                    flush_and_ack(conn);
+                }
             }
         }
     }
@@ -91,21 +119,15 @@ int start_server() {
 }
 
 int main(int argc, char *argv[]) {
-    int i = 0, status = 0;
-
-    pthread_t workers[NUM_WORKERS];
-    worker_t workers_args[NUM_WORKERS];
-
-    connection_t connections[N];
-    char file_name[20];
-
     int socket_fd = start_server();
     if (socket_fd == -1) {
         printf("Server launch failed.\n");
         return 1;
     }
 
-    for (i = 0; i < N; ++i) {
+    char file_name[20];
+    connection_t *connections = malloc(sizeof(connection_t) * N);
+    for (int i = 0; i < N; ++i) {
         connections[i].network_fd = accept(socket_fd, (struct sockaddr *)NULL, NULL);
         if (sprintf(file_name, "./%d.txt", i) < 0) {
             printf("sprintf() failed");
@@ -118,32 +140,47 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         connections[i].is_active = true;
+        connections[i].write_buf_size = 0;
+        connections[i].unacked = 0;
     }
+
+    pthread_t workers[NUM_WORKERS];
+    worker_t workers_args[NUM_WORKERS];
 
     connection_t *start_conn = connections;
     int connections_left = N;
-    for (i = 0; i < NUM_WORKERS; ++i) {
-        workers_args[i].idx = i;
-        workers_args[i].connections = start_conn;
-        workers_args[i].connections_size =
-            connections_left < CONNECTIONS_PER_WORKER ? connections_left : CONNECTIONS_PER_WORKER;
-        workers_args[i].active_connections = workers_args[i].connections_size;
-        start_conn += workers_args[i].connections_size;
-        connections_left -= workers_args[i].connections_size;
 
-        status = pthread_create(&workers[i], NULL, worker_routine, &workers_args[i]);
+    static const int CONNECTIONS_PER_WORKER =
+        (N % NUM_WORKERS == 0) ? N / NUM_WORKERS : (N / NUM_WORKERS + 1);
+
+    for (int i = 0; i < NUM_WORKERS; ++i) {
+        worker_t *worker = &workers_args[i];
+        worker->idx = i;
+        worker->connections = start_conn;
+        worker->connections_size =
+            connections_left < CONNECTIONS_PER_WORKER ? connections_left : CONNECTIONS_PER_WORKER;
+        worker->active_connections = worker->connections_size;
+        start_conn += worker->connections_size;
+        connections_left -= worker->connections_size;
+
+        int status = pthread_create(&workers[i], NULL, worker_routine, worker);
         if (status != 0) {
             printf("Create thread %d failed, status = %d\n", i, status);
             return -1;
         }
     }
 
-    for (i = 0; i < NUM_WORKERS; ++i) {
-        status = pthread_join(workers[i], NULL);
+    for (int i = 0; i < NUM_WORKERS; ++i) {
+        int status = pthread_join(workers[i], NULL);
         if (status != 0) {
             printf("Join thread %d failed, status = %d\n", i, status);
         }
     }
 
+    for (int i = 0; i < N; ++i) {
+        close(connections[i].network_fd);
+        fclose(connections[i].disk_fd);
+    }
+    free(connections);
     return 0;
 }

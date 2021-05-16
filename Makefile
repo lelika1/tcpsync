@@ -13,5 +13,5 @@ run: server client
 	./server &
 	time -p ./client
 
-cleanup:
+clean:
 	rm -f *.txt client server

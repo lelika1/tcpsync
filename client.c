@@ -10,13 +10,24 @@
 
 #include "utils.h"
 
-#define MAX_INFLIGHT 1000  // TODO: tune the number
+// Number of messages every client thread retains in memory unacked.
 
-const int MAX_RETRIES = 5;
 const uint32_t MESSAGES_COUNT = 10000;  // 5000000
+const uint32_t MEMUSED_MB = MAX_INFLIGHT_CLIENT * MESSAGE_SIZE * N / 1024 / 1024;
+
+const int MAX_CONNECTION_RETRIES = 5;
+
+int read_acks(int fd, uint32_t *count, uint32_t *ids) {
+    int err = read_n_bytes(fd, sizeof(uint32_t), (char *)count);
+    if (err != 0) {
+        return err;
+    }
+    *count = ntohl(*count);
+    return read_n_bytes(fd, sizeof(uint32_t) * (*count), (char *)ids);
+}
 
 void *client_routine(void *args) {
-    int i = 0, socket_fd = 0, retry = 0;
+    int socket_fd = 0, retry = 0;
     int thread_idx = *(int *)args;
 
     int msg_len = 0;
@@ -34,7 +45,7 @@ void *client_routine(void *args) {
     }
 
     while (connect(socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-        if (++retry == MAX_RETRIES) {
+        if (++retry == MAX_CONNECTION_RETRIES) {
             printf("[%d] Failed to connect to server.\n", thread_idx);
             return NULL;
         }
@@ -43,56 +54,70 @@ void *client_routine(void *args) {
     }
 
     // Allocate on heap, since we might need a lot of memory.
-    msg_buf = malloc(BUFFER_SIZE * MAX_INFLIGHT);
-    for (i = 0; i < MESSAGES_COUNT; ++i) {
-        if (inflight < MAX_INFLIGHT) {
-            msg_len = prepare_msg_buf(thread_idx, inflight, msg_buf + BUFFER_SIZE * inflight);
-            send(socket_fd, msg_buf + BUFFER_SIZE * inflight, msg_len, 0);
+    msg_buf = malloc(MESSAGE_SIZE * MAX_INFLIGHT_CLIENT);
+    int msg_sent = 0;
+    uint32_t num_acks = 0;
+    uint32_t acks[MAX_INFLIGHT_SERVER];
+    while (msg_sent < MESSAGES_COUNT) {
+        if (inflight < MAX_INFLIGHT_CLIENT) {
+            msg_len = prepare_msg_buf(thread_idx, inflight, msg_buf + MESSAGE_SIZE * inflight);
+            send(socket_fd, msg_buf + MESSAGE_SIZE * inflight, msg_len, 0);
             ++inflight;
+            ++msg_sent;
+            DEBUGF("[%d] msg #%d\n", thread_idx, msg_sent);
             continue;
         }
 
-        read_n_bytes(socket_fd, 4, (char *)&acked_idx);
-        acked_idx = ntohl(acked_idx);
-        // Re-using the place for the acked message to send a new one.
-        msg_len = prepare_msg_buf(thread_idx, acked_idx, msg_buf + BUFFER_SIZE * acked_idx);
-        send(socket_fd, msg_buf + BUFFER_SIZE * acked_idx, msg_len, 0);
-    }
+        read_acks(socket_fd, &num_acks, acks);
+        DEBUGF("[%d] read #%d acks\n", thread_idx, acked_idx_count);
+        for (int i = 0; i < num_acks; ++i) {
+            if (msg_sent >= MESSAGES_COUNT) {
+                inflight -= (num_acks - i);
+                DEBUGF("[%d] nothing to send. now inflight %d\n", thread_idx, inflight);
+                break;
+            }
 
-    printf("Thread %d sent all messages - waiting for acks.\n", thread_idx);
-
-    while (inflight > 0) {
-        read_n_bytes(socket_fd, 4, (char *)&acked_idx);
-        --inflight;
+            acked_idx = ntohl(acks[i]);
+            // Re-using the place for the acked message to send a new one.
+            msg_len = prepare_msg_buf(thread_idx, acked_idx, msg_buf + MESSAGE_SIZE * acked_idx);
+            send(socket_fd, msg_buf + MESSAGE_SIZE * acked_idx, msg_len, 0);
+            ++msg_sent;
+            DEBUGF(" [%d] msg #%d on a vacant place %d\n", thread_idx, msg_sent, acked_idx);
+        }
     }
 
     // We've sent all messages - let's send a closing message.
+    DEBUGF("[%d] Closing. inflight %d\n", thread_idx, inflight);
     msg_len = prepare_closing_buf(msg_buf);
     send(socket_fd, msg_buf, msg_len, 0);
+
+    while (inflight > 0) {
+        read_acks(socket_fd, &num_acks, acks);
+        inflight -= num_acks;
+    }
 
     free(msg_buf);
     return NULL;
 }
 
 int main(int argc, char *argv[]) {
-    int idx = 0;
     int status = 0;
     pthread_t threads[N];
     int thread_idxs[N];
 
-    for (idx = 0; idx < N; ++idx) {
-        thread_idxs[idx] = idx;
-        status = pthread_create(&threads[idx], NULL, client_routine, &thread_idxs[idx]);
+    for (int i = 0; i < N; ++i) {
+        thread_idxs[i] = i;
+        status = pthread_create(&threads[i], NULL, client_routine, &thread_idxs[i]);
         if (status != 0) {
-            printf("Create thread %d failed, status = %d\n", idx, status);
+            printf("Create thread %d failed, status = %d\n", i, status);
             return status;
         }
     }
 
-    for (idx = 0; idx < N; ++idx) {
-        status = pthread_join(threads[idx], NULL);
+    for (int i = 0; i < N; ++i) {
+        status = pthread_join(threads[i], NULL);
         if (status != 0) {
-            printf("Join thread %d failed, status = %d\n", idx, status);
+            printf("Join thread %d failed, status = %d\n", i, status);
             return status;
         }
     }

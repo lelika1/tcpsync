@@ -3,14 +3,6 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-const int N = 8;  // 64
-
-const int NUM_WORKERS = N / 3;
-const int CONNECTIONS_PER_WORKER = (N % NUM_WORKERS == 0) ? N / NUM_WORKERS : (N / NUM_WORKERS + 1);
-
-const int SERVER_PORT = 5000;
-const char SERVER_IP[] = "127.0.0.1";
-
 struct sockaddr_in init_server_addr() {
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
