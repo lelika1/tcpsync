@@ -1,5 +1,3 @@
-.PHONY: cleanup
-
 all: server client
 
 server: server.c utils.h utils.c
@@ -13,7 +11,7 @@ run_server: server client
 
 run: server client
 	./server &
-	time ./client
+	time -p ./client
 
 cleanup:
 	rm -f *.txt client server

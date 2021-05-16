@@ -4,9 +4,9 @@
 #include <sys/types.h>
 
 const int N = 8;  // 64
-const int WORKERS = N / 3;
-const int CONNECTIONS_PER_WORKER =
-    (N % WORKERS == 0) ? N / WORKERS : (N / WORKERS + 1);
+
+const int NUM_WORKERS = N / 3;
+const int CONNECTIONS_PER_WORKER = (N % NUM_WORKERS == 0) ? N / NUM_WORKERS : (N / NUM_WORKERS + 1);
 
 const int SERVER_PORT = 5000;
 const char SERVER_IP[] = "127.0.0.1";
@@ -19,7 +19,7 @@ struct sockaddr_in init_server_addr() {
     return server_addr;
 }
 
-int readbytes(int conn_fd, char *to, size_t n) {
+int read_n_bytes(int conn_fd, size_t n, char *to) {
     int got = 0;
     while (n > 0) {
         got = recv(conn_fd, to, n, 0);
@@ -33,58 +33,38 @@ int readbytes(int conn_fd, char *to, size_t n) {
 }
 
 // Returns size of data in `out`.
-int deserialize_msg(int conn_fd, message_t *out) {
+int read_msg(int conn_fd, message_t *out) {
     char buf[9];
-    if (readbytes(conn_fd, buf, 9) == -1) {
+    if (read_n_bytes(conn_fd, 9, buf) == -1) {
         printf("Failed to read header.\n");
         return -1;
     }
     out->msg_id = ntohl(*((uint32_t *)buf));
     out->body_size = ntohl(*((uint32_t *)(buf + 4)));
     if (out->body_size > sizeof(out->msg)) {
-        printf("Body size (%d) is bigger than max message size (%ld)\n",
-               out->body_size, sizeof(out->msg));
+        printf("Body size (%d) is bigger than max message size (%ld)\n", out->body_size,
+               sizeof(out->msg));
         return -1;
     }
     out->is_finish = buf[8];
-    if (readbytes(conn_fd, out->msg, out->body_size) == -1) {
+    if (read_n_bytes(conn_fd, out->body_size, out->msg) == -1) {
         printf("Failed to read body with size %d.\n", out->body_size);
         return -1;
     }
     return 0;
 }
 
-// Returns size of data in `out`.
-int serialize_msg(const message_t *msg, char *out) {
-    *((uint32_t *)out) = htonl(msg->msg_id);
-    out += 4;
-    *((uint32_t *)out) = htonl(msg->body_size);
-    out += 4;
-    *out = msg->is_finish;
-    out += 1;
-    memcpy(out, msg->msg, msg->body_size);
-    return msg->body_size + 9;
+int prepare_msg_buf(int thread_idx, int msg_idx, char *out) {
+    uint32_t body_size = sprintf(out + 9, "Hi from %d msg: %d.\n", thread_idx, msg_idx);
+    *(uint32_t *)out = htonl(msg_idx);
+    *(uint32_t *)(out + 4) = htonl(body_size);
+    out[8] = 0;  // is_finish = 0
+    return body_size + 9;
 }
 
-int prepare_msg_buf(int thread_idx, int msg_idx, char *msg_buf) {
-    message_t msg;
-    int msg_len;
-
-    msg.msg_id = thread_idx;
-    msg.is_finish = '0';
-    msg.body_size =
-        sprintf(msg.msg, "Hi from %d msg: %d.\n", thread_idx, msg_idx);
-    msg_len = serialize_msg(&msg, msg_buf);
-    return msg_len;
-}
-
-int prepare_closing_buf(char *msg_buf) {
-    message_t msg;
-    int msg_len;
-
-    msg.msg_id = -1;
-    msg.is_finish = '1';
-    msg.body_size = 0;
-    msg_len = serialize_msg(&msg, msg_buf);
-    return msg_len;
+int prepare_closing_buf(char *out) {
+    *(uint32_t *)out = 0;        // msg_idx = 0
+    *(uint32_t *)(out + 4) = 0;  // body_size = 0
+    out[8] = 1;                  // is_finish = 1
+    return 9;
 }
