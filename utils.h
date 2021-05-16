@@ -7,19 +7,17 @@
 
 extern const int N;
 extern const int WORKERS;
-extern const uint32_t MESSAGES_COUNT;
 extern const int CONNECTIONS_PER_WORKER;
 extern const int SERVER_PORT;
 extern const char SERVER_IP[];
-extern const int MAX_RETRIES;
 
 #define BUFFER_SIZE 8192
 
 typedef struct {
-  uint32_t msg_id;
-  uint32_t body_size;
-  char is_finish;
-  char msg[8192];
+    uint32_t msg_id;
+    uint32_t body_size;
+    char is_finish;
+    char msg[BUFFER_SIZE];
 } message_t;
 
 int readbytes(int conn_fd, char *to, size_t n);

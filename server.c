@@ -1,5 +1,4 @@
 #include "server.h"
-#include "utils.h"
 
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -10,18 +9,20 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "utils.h"
+
 void *worker_routine(void *args) {
     int idx;
     int ack = 0;
 
-    init_args_t *descr = (init_args_t *) args;
+    init_args_t *descr = (init_args_t *)args;
     for (idx = 0; idx < descr->conn_count; ++idx) {
         printf("%d -> %d\n", descr->idx, descr->connections[idx].conn_fd);
     }
-    
+
     message_t msg;
     int cycle = 0;
-    for (cycle = 0; cycle < MESSAGES_COUNT; ++cycle) {
+    for (cycle = 0; cycle < 3; ++cycle) {
         for (idx = 0; idx < descr->conn_count; ++idx) {
             deserialize_msg(descr->connections[idx].conn_fd, &msg);
             fwrite(msg.msg, msg.body_size, 1, descr->connections[idx].out_fd);
@@ -41,7 +42,7 @@ int main(int argc, char *argv[]) {
     init_args_t threads_args[WORKERS];
     conn_descr_t connections[N];
     char file_name[20];
- 
+
     struct sockaddr_in server_addr = init_server_addr();
     server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
@@ -51,21 +52,25 @@ int main(int argc, char *argv[]) {
         printf("Socket creation failed.\n");
         return 1;
     }
-   
-    if (bind(socket_fd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) {
+
+    if (bind(socket_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) ==
+        -1) {
         // TODO proccess error
+        close(socket_fd);
         printf("Server: bind failed.\n");
         return 1;
     }
 
     if (listen(socket_fd, N) != 0) {
         // TODO proccess error
+        close(socket_fd);
         printf("Server: listen failed.\n");
         return 1;
     }
 
     for (i = 0; i < N; ++i) {
-        connections[i].conn_fd = accept(socket_fd, (struct sockaddr*)NULL, NULL);
+        connections[i].conn_fd =
+            accept(socket_fd, (struct sockaddr *)NULL, NULL);
         if (sprintf(file_name, "./%d.txt", i) < 0) {
             printf("sprintf() failed");
             return 1;
@@ -81,14 +86,17 @@ int main(int argc, char *argv[]) {
 
     conn_descr_t *start_conn = connections;
     int connections_left = N;
-    for (i = 0; i < WORKERS; ++i) {        
+    for (i = 0; i < WORKERS; ++i) {
         threads_args[i].idx = i;
         threads_args[i].connections = start_conn;
-        threads_args[i].conn_count = connections_left < CONNECTIONS_PER_WORKER ? connections_left : CONNECTIONS_PER_WORKER;
+        threads_args[i].conn_count = connections_left < CONNECTIONS_PER_WORKER
+                                         ? connections_left
+                                         : CONNECTIONS_PER_WORKER;
         start_conn += threads_args[i].conn_count;
         connections_left -= threads_args[i].conn_count;
 
-        status = pthread_create(&threads[i], NULL, worker_routine, &threads_args[i]);
+        status =
+            pthread_create(&threads[i], NULL, worker_routine, &threads_args[i]);
         if (status != 0) {
             // TODO proccess error
             printf("Create thread %d failed, status = %d\n", i, status);
@@ -102,7 +110,7 @@ int main(int argc, char *argv[]) {
             printf("Join thread %d failed, status = %d\n", i, status);
         }
     }
-    
+
     for (i = 0; i < N; ++i) {
         close(connections[i].conn_fd);
         fclose(connections[i].out_fd);
