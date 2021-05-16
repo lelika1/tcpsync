@@ -6,12 +6,12 @@
 #include "utils.h"
 
 typedef struct {
-    int network_fd;
     bool is_active;
+    int network_fd;
     FILE *disk_fd;
 
     char write_buf[MAX_INFLIGHT_SERVER * MESSAGE_SIZE];
-    int write_buf_size;
+    uint32_t write_buf_size;
 
     uint32_t unacked_ids[MAX_INFLIGHT_SERVER];
     int unacked;
@@ -23,8 +23,6 @@ typedef struct {
     int connections_size;
     int active_connections;
 } worker_t;
-
-const int MEMUSED_MB = (NUM_WORKERS * sizeof(worker_t) + sizeof(connection_t) * N) / 1024 / 1024;
 
 void fill_fd_set(const worker_t *worker, fd_set *fdset) {
     int i = 0;
@@ -61,7 +59,9 @@ void *worker_routine(void *args) {
     worker_t *worker = (worker_t *)args;
     while (worker->active_connections > 0) {
         fill_fd_set(worker, &read_fd_set);
-        if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) <= 0) {
+        int err = select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL);
+        if (err <= 0) {
+            printf("select() failed with %d", err);
             continue;
         }
 
@@ -71,7 +71,7 @@ void *worker_routine(void *args) {
                 continue;
             }
 
-            read_msg(conn->network_fd, &msg);
+            recv_msg(conn->network_fd, &msg);
             if (msg.msg_id == CLOSING_ID) {
                 conn->is_active = false;
                 --worker->active_connections;
@@ -80,7 +80,7 @@ void *worker_routine(void *args) {
                 }
             } else {
                 // TODO: check that we don't overflow conn->write_buf
-                memcpy(conn->write_buf + conn->write_buf_size, msg.msg, msg.body_size);
+                memcpy(conn->write_buf + conn->write_buf_size, msg.payload, msg.body_size);
                 conn->write_buf_size += msg.body_size;
                 conn->unacked_ids[conn->unacked] = htonl(msg.msg_id);
                 ++conn->unacked;
@@ -125,7 +125,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    char file_name[20];
+    char file_name[50];
     connection_t *connections = malloc(sizeof(connection_t) * N);
     for (int i = 0; i < N; ++i) {
         connections[i].network_fd = accept(socket_fd, (struct sockaddr *)NULL, NULL);
@@ -184,3 +184,6 @@ int main(int argc, char *argv[]) {
     free(connections);
     return 0;
 }
+
+// Constants below are for memory and file size computations (not used anywhere).
+const int MEMUSED_MB = (NUM_WORKERS * sizeof(worker_t) + sizeof(connection_t) * N) / 1024 / 1024;

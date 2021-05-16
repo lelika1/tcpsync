@@ -12,18 +12,21 @@
 
 // Number of messages every client thread retains in memory unacked.
 
-const uint32_t MESSAGES_COUNT = 10000;  // 5000000
-const uint32_t MEMUSED_MB = MAX_INFLIGHT_CLIENT * MESSAGE_SIZE * N / 1024 / 1024;
-
+const uint32_t MESSAGES_COUNT = 5000000;
 const int MAX_CONNECTION_RETRIES = 5;
 
+// Constants below are for memory and file size computations (not used anywhere).
+const uint32_t MEMUSED_MB = MAX_INFLIGHT_CLIENT * MESSAGE_SIZE * N / 1024 / 1024;
+const uint32_t FILESIZE_MB = MESSAGES_COUNT * MESSAGE_SIZE / 1024 / 1024;
+const uint32_t ALL_FILES_GB = FILESIZE_MB * N / 1024;
+
 int read_acks(int fd, uint32_t *count, uint32_t *ids) {
-    int err = read_n_bytes(fd, sizeof(uint32_t), (char *)count);
+    int err = recv_n_bytes(fd, sizeof(uint32_t), (char *)count);
     if (err != 0) {
         return err;
     }
     *count = ntohl(*count);
-    return read_n_bytes(fd, sizeof(uint32_t) * (*count), (char *)ids);
+    return recv_n_bytes(fd, sizeof(uint32_t) * (*count), (char *)ids);
 }
 
 void *client_routine(void *args) {
@@ -59,8 +62,12 @@ void *client_routine(void *args) {
     uint32_t num_acks = 0;
     uint32_t acks[MAX_INFLIGHT_SERVER];
     while (msg_sent < MESSAGES_COUNT) {
+        if (msg_sent % 100000 == 0) {
+            printf("[%d] Sent %d messages (%.2f%%)\n", thread_idx, msg_sent,
+                   (double)(msg_sent * 100) / MESSAGES_COUNT);
+        }
         if (inflight < MAX_INFLIGHT_CLIENT) {
-            msg_len = prepare_msg_buf(thread_idx, inflight, msg_buf + MESSAGE_SIZE * inflight);
+            msg_len = write_msg(thread_idx, inflight, msg_buf + MESSAGE_SIZE * inflight);
             send(socket_fd, msg_buf + MESSAGE_SIZE * inflight, msg_len, 0);
             ++inflight;
             ++msg_sent;
@@ -79,7 +86,7 @@ void *client_routine(void *args) {
 
             acked_idx = ntohl(acks[i]);
             // Re-using the place for the acked message to send a new one.
-            msg_len = prepare_msg_buf(thread_idx, acked_idx, msg_buf + MESSAGE_SIZE * acked_idx);
+            msg_len = write_msg(thread_idx, acked_idx, msg_buf + MESSAGE_SIZE * acked_idx);
             send(socket_fd, msg_buf + MESSAGE_SIZE * acked_idx, msg_len, 0);
             ++msg_sent;
             DEBUGF(" [%d] msg #%d on a vacant place %d\n", thread_idx, msg_sent, acked_idx);
@@ -88,7 +95,7 @@ void *client_routine(void *args) {
 
     // We've sent all messages - let's send a closing message.
     DEBUGF("[%d] Closing. inflight %d\n", thread_idx, inflight);
-    msg_len = prepare_closing_buf(msg_buf);
+    msg_len = write_closing_msg(msg_buf);
     send(socket_fd, msg_buf, msg_len, 0);
 
     while (inflight > 0) {
