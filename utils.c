@@ -1,11 +1,11 @@
-#include "utiles.h"
+#include "utils.h"
 
 #include <sys/socket.h>
 #include <sys/types.h>
 
 const int N = 8; // 64
 const int WORKERS = N / 3;
-const uint32_t MESSAGES_COUNT = 5; // 5000000
+const uint32_t MESSAGES_COUNT = 1000; // 5000000
 const int CONNECTIONS_PER_WORKER =
     (N % WORKERS == 0) ? N / WORKERS : (N / WORKERS + 1);
 
@@ -65,4 +65,26 @@ int serialize_msg(const message_t *msg, char *out) {
     out += 1;
     memcpy(out, msg->msg, msg->body_size);
     return msg->body_size + 9;
+}
+
+int prepare_msg_buf(int thread_idx, int msg_idx, char* msg_buf) {
+    message_t msg;
+    int msg_len;
+
+    msg.msg_id = thread_idx;
+    msg.is_finish = '0';
+    msg.body_size = sprintf(msg.msg, "Hi from %d msg: %d.\n", thread_idx, msg_idx);
+    msg_len = serialize_msg(&msg, msg_buf);
+    return msg_len;
+}
+
+int prepare_closing_buf(char* msg_buf) {
+    message_t msg;
+    int msg_len;
+
+    msg.msg_id = -1;
+    msg.is_finish = '1';
+    msg.body_size = 0;
+    msg_len = serialize_msg(&msg, msg_buf);
+    return msg_len;
 }

@@ -1,5 +1,5 @@
 #include "server.h"
-#include "utiles.h"
+#include "utils.h"
 
 #include <arpa/inet.h>
 #include <pthread.h>
@@ -12,15 +12,23 @@
 
 void *worker_routine(void *args) {
     int idx;
+    int ack = 0;
+
     init_args_t *descr = (init_args_t *) args;
     for (idx = 0; idx < descr->conn_count; ++idx) {
         printf("%d -> %d\n", descr->idx, descr->connections[idx].conn_fd);
     }
     
     message_t msg;
-    for (idx = 0; idx < descr->conn_count; ++idx) {
-        deserialize_msg(descr->connections[idx].conn_fd, &msg);
-        fwrite(msg.msg, msg.body_size, 1, descr->connections[idx].out_fd);
+    int cycle = 0;
+    for (cycle = 0; cycle < MESSAGES_COUNT; ++cycle) {
+        for (idx = 0; idx < descr->conn_count; ++idx) {
+            deserialize_msg(descr->connections[idx].conn_fd, &msg);
+            fwrite(msg.msg, msg.body_size, 1, descr->connections[idx].out_fd);
+
+            ack = htonl(msg.msg_id);
+            send(descr->connections[idx].conn_fd, &ack, 4, 0);
+        }
     }
     return NULL;
 }
@@ -86,7 +94,6 @@ int main(int argc, char *argv[]) {
             printf("Create thread %d failed, status = %d\n", i, status);
         }
     }
-
 
     for (i = 0; i < WORKERS; ++i) {
         status = pthread_join(threads[i], NULL);

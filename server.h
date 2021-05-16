@@ -9,11 +9,9 @@ typedef struct {
 } conn_descr_t;
 
 typedef struct {
-  int idx;
-  conn_descr_t *connections;
-  int conn_count;
+    int idx;
+    conn_descr_t *connections;
+    int conn_count;
 } init_args_t;
-
-
 
 #endif

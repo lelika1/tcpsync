@@ -1,4 +1,4 @@
-#include "utiles.h"
+#include "utils.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -11,11 +11,11 @@
 
 void *client_routine(void *args) {
     int i = 0, socket_fd = 0, retry = 0;
-    message_t msg;
     int thread_idx = *(int *)args;
 
     int msg_len = 0;
     char msg_buf[BUFFER_SIZE];
+    uint32_t ack = 0;
 
     struct sockaddr_in server_addr = init_server_addr();
     server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
@@ -39,11 +39,16 @@ void *client_routine(void *args) {
     }
 
     for (i = 0; i < MESSAGES_COUNT; ++i) {
-        msg.msg_id = i;
-        msg.body_size = sprintf(msg.msg, "Hi from %d msg: %d", thread_idx, i);
-        msg_len = serialize_msg(&msg, msg_buf);
+        msg_len = prepare_msg_buf(thread_idx, i, msg_buf);
         send(socket_fd, msg_buf, msg_len, 0);
+        
+        readbytes(socket_fd, (char *)&ack, 4);
+        ack = ntohl(ack);
+        printf("id: %d, ack: %d\n", thread_idx, ack);
     }
+
+    msg_len = prepare_closing_buf(msg_buf);
+    send(socket_fd, msg_buf, msg_len, 0);
     return NULL;
 }
 
