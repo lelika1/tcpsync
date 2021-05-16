@@ -2,11 +2,11 @@
 
 all: server client
 
-server: server.c config.h
-	gcc -o server server.c -lpthread -I.
+server: server.c utiles.h utiles.c
+	gcc -o server server.c utiles.c -lpthread -I.
 
-client: client.c config.h
-	gcc -o client client.c -lpthread -I.
+client: client.c utiles.h utiles.c
+	gcc -o client client.c utiles.c -lpthread -I.
 
 run_server: server client
 	./server

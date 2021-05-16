@@ -1,4 +1,4 @@
-#include "config.h"
+#include "utiles.h"
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -9,18 +9,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-// Returns size of data in `out`.
-int serialize_msg(const message_t *msg, char *out) {
-    *((uint32_t*)out) = htonl(msg->msg_id);
-    out += 4;
-    *((uint32_t *)out) = htonl(msg->body_size);
-    out += 4;
-    *out = msg->is_finish;
-    out += 1;
-    memcpy(out, msg->msg, msg->body_size);
-    return msg->body_size + 9;
-}
-
 void *client_routine(void *args) {
     int i = 0, socket_fd = 0, retry = 0;
     message_t msg;
@@ -29,10 +17,7 @@ void *client_routine(void *args) {
     int msg_len = 0;
     char msg_buf[BUFFER_SIZE];
 
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
+    struct sockaddr_in server_addr = init_server_addr();
     server_addr.sin_addr.s_addr = inet_addr(SERVER_IP);
 
     socket_fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -53,14 +38,13 @@ void *client_routine(void *args) {
         sleep(1);
     }
 
-    msg.msg_id = 1;
-    msg.body_size = sprintf(msg.msg, "Hi from %d", thread_idx);
-    msg_len = serialize_msg(&msg, msg_buf);
-    send(socket_fd, msg_buf, msg_len, 0);
-
     for (i = 0; i < MESSAGES_COUNT; ++i) {
+        msg.msg_id = i;
+        msg.body_size = sprintf(msg.msg, "Hi from %d msg: %d", thread_idx, i);
+        msg_len = serialize_msg(&msg, msg_buf);
+        send(socket_fd, msg_buf, msg_len, 0);
     }
-     return NULL;
+    return NULL;
 }
 
 int main(int argc, char *argv[]) {
